@@ -1,0 +1,148 @@
+// ==== Константы ====
+const API_PATH = "/api/order?limit=10000&offset=0&status_id=in%3A5%2C6%2C13%2C14%2C20%2C9%2C10%2C12%2C17%2C18%2C19%2C11";
+const MAX_ROWS = 15000;
+const CRM_DOMAIN = "{{CRM_URL}}"; // Подставь сюда свою ссылку на CRM
+
+const STATUS_MAP = {
+  '1': 'Новая', '2': 'Новая', '4': 'Отмена', '5': 'Принята',
+  '6': 'Подтверждена', '9': 'Оплачено', '10': 'Доставка',
+  '11': 'Возврат', '12': 'Прибыл', '13': 'Упаковка',
+  '14': 'Статус 14', '17': 'Статус 17', '18': 'Статус 18',
+  '19': 'УкрПочта Доставка', '20': 'УкрПочта Принято'
+};
+
+// ==== Загрузка XLSX ====
+try {
+  importScripts && importScripts('./xlsx.full.min.js');
+} catch (error) {
+  console.warn('Если не в воркере, игнорируем ошибку importScripts');
+}
+
+// ==== Кнопка ====
+const button = document.createElement('button');
+button.innerHTML = `
+  <span style="
+    display: inline-block;
+    vertical-align: middle;
+    margin-right: 8px;
+    font-size: 16px;
+  ">😈</span> 
+Скачать трафик`;
+
+button.style = `
+  position: fixed;
+  bottom: 25px;
+  right: 25px;
+  z-index: 99999;
+  padding: 12px 20px;
+  background: #ff0000;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: Arial;
+  font-size: 14px;
+  font-weight: bold;
+  text-transform: uppercase;
+  box-shadow: 0 3px 12px rgba(255, 0, 0, 0.3);
+  transition: all 0.2s;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.3);
+`;
+
+button.addEventListener('mouseenter', () => {
+  button.style.background = '#cc0000';
+  button.style.transform = 'translateY(-2px)';
+  button.style.boxShadow = '0 5px 15px rgba(255, 0, 0, 0.4)';
+});
+button.addEventListener('mouseleave', () => {
+  button.style.background = '#ff0000';
+  button.style.transform = 'translateY(0)';
+  button.style.boxShadow = '0 3px 12px rgba(255, 0, 0, 0.3)';
+});
+button.addEventListener('mousedown', () => {
+  button.style.transform = 'translateY(1px)';
+  button.style.boxShadow = '0 1px 5px rgba(255, 0, 0, 0.4)';
+});
+button.addEventListener('mouseup', () => {
+  button.style.transform = 'translateY(-2px)';
+});
+button.addEventListener('click', async () => {
+  try {
+    button.disabled = true;
+    button.style.opacity = '0.7';
+
+    const token = localStorage.getItem('user-token');
+    if (!token) throw new Error('Токен авторизации не найден');
+
+    await exportHandler(token);
+
+  } catch (error) {
+    console.error('Ошибка экспорта:', error);
+    alert(`Ошибка: ${error.message}`);
+  } finally {
+    button.disabled = false;
+    button.style.opacity = '1';
+  }
+});
+document.body.appendChild(button);
+
+// ==== Экспорт данных ====
+async function exportHandler(token) {
+  if (typeof XLSX === 'undefined') throw new Error('Библиотека XLSX не загружена');
+
+  const response = await fetch(`${CRM_DOMAIN}${API_PATH}`, {
+    headers: { 'Authorization': `Bearer ${token}` }
+  });
+
+  if (!response.ok) throw new Error(`Ошибка ${response.status}`);
+  const { data } = await response.json();
+
+  if (!data?.length) throw new Error('Нет данных для экспорта');
+
+  const exportData = data.length > MAX_ROWS 
+    ? data.slice(0, MAX_ROWS)
+    : data;
+
+  const rows = exportData.map(item => ({
+    'ФИО': item.full_name || '—',
+    'Телефон': item.phone || '—',
+    'Сумма': item.price || 0,
+    'Статус': STATUS_MAP[item.status_id] || item.status_id,
+    'Дата': item.last_status_change_date || '—',
+    'Отделение': item.delivery?.warehouse || '—',
+    'Город': item.delivery?.city || '—',
+    'Товар': item.delivery?.parcel_info || '—',
+    'ТТН': item.delivery?.ttn_number || '—',
+    'Статус доставки': item.delivery?.ttn_status_name || '—'
+  }));
+
+  const workbook = XLSX.utils.book_new();
+  const worksheet = XLSX.utils.json_to_sheet(rows);
+  XLSX.utils.book_append_sheet(workbook, worksheet, "Заказы");
+
+  const excelBuffer = XLSX.write(workbook, {
+    bookType: 'xlsx',
+    type: 'array'
+  });
+
+  const base64 = bufferToBase64(excelBuffer);
+
+  chrome.downloads.download({
+    url: `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${base64}`,
+    filename: `CRM_Export_${Date.now()}.xlsx`,
+    saveAs: true
+  });
+}
+
+function bufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 32768;
+  let output = '';
+
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize);
+    output += String.fromCharCode(...chunk);
+  }
+
+  return btoa(output);
+}
